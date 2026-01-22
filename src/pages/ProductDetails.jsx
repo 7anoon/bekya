@@ -1,0 +1,806 @@
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
+import { useAuthStore } from '../store/authStore';
+import { useProductStore } from '../store/productStore';
+import ImageLightbox from '../components/ImageLightbox';
+
+export default function ProductDetails() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { profile } = useAuthStore();
+  const { approveProduct, rejectProduct, negotiateProduct } = useProductStore();
+  const [product, setProduct] = useState(null);
+  const [seller, setSeller] = useState(null);
+  const [activeOffer, setActiveOffer] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [showNegotiationModal, setShowNegotiationModal] = useState(false);
+  const [negotiationPrice, setNegotiationPrice] = useState('');
+  const [negotiationNote, setNegotiationNote] = useState('');
+
+  useEffect(() => {
+    loadProductDetails();
+  }, [id]);
+
+  const loadProductDetails = async () => {
+    try {
+      // جلب تفاصيل المنتج
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (productError) throw productError;
+
+      // البحث عن عرض نشط يطابق فئة المنتج
+      const { data: offers } = await supabase
+        .from('offers')
+        .select('*')
+        .eq('is_active', true)
+        .eq('category', productData.category);
+
+      let matchingOffer = null;
+      if (offers && offers.length > 0) {
+        // اختيار أول عرض نشط ولم ينتهي
+        matchingOffer = offers.find(offer => 
+          offer.discount_percentage && 
+          (!offer.end_date || new Date(offer.end_date) > new Date())
+        );
+      }
+
+      setActiveOffer(matchingOffer);
+
+      // إذا كان المستخدم أدمن، يجيب معلومات البائع الحقيقي
+      // إذا كان مستخدم عادي، يجيب معلومات الأدمن
+      let contactData;
+      if (profile?.role === 'admin') {
+        // جلب معلومات البائع الحقيقي للأدمن
+        const { data: sellerData, error: sellerError } = await supabase
+          .from('profiles')
+          .select('username, phone, location, email')
+          .eq('id', productData.user_id)
+          .single();
+
+        if (sellerError) throw sellerError;
+        contactData = sellerData;
+      } else {
+        // جلب معلومات الأدمن للمستخدمين العاديين
+        const { data: adminData, error: adminError } = await supabase
+          .from('profiles')
+          .select('username, phone, location, email')
+          .eq('role', 'admin')
+          .limit(1)
+          .single();
+
+        if (adminError) throw adminError;
+        contactData = adminData;
+      }
+
+      setProduct(productData);
+      setSeller(contactData);
+    } catch (err) {
+      console.error('Error loading product:', err);
+      alert('خطأ في تحميل تفاصيل المنتج');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openLightbox = (index) => {
+    setCurrentImageIndex(index);
+    setLightboxOpen(true);
+  };
+
+  const handleApprove = async (price) => {
+    if (!confirm('هل تريد الموافقة على هذا المنتج؟')) return;
+    
+    try {
+      await approveProduct(product.id, price);
+      alert('تم الموافقة على المنتج');
+      navigate('/admin');
+    } catch (err) {
+      alert('خطأ في الموافقة على المنتج');
+    }
+  };
+
+  const handleReject = async () => {
+    const reason = prompt('سبب الرفض:');
+    if (!reason) return;
+    
+    try {
+      await rejectProduct(product.id, reason);
+      alert('تم رفض المنتج');
+      navigate('/admin');
+    } catch (err) {
+      alert('خطأ في رفض المنتج');
+    }
+  };
+
+  const handleNegotiate = () => {
+    setNegotiationPrice(product.suggested_price || product.negotiated_price || '');
+    setNegotiationNote('');
+    setShowNegotiationModal(true);
+  };
+
+  const handleSendNegotiation = async () => {
+    if (!negotiationPrice || negotiationPrice <= 0) {
+      alert('يجب إدخال سعر صحيح');
+      return;
+    }
+
+    try {
+      await negotiateProduct(product.id, negotiationPrice, negotiationNote);
+      alert('تم إرسال عرض التفاوض للبائع');
+      setShowNegotiationModal(false);
+      loadProductDetails();
+    } catch (err) {
+      alert('خطأ في إرسال عرض التفاوض');
+    }
+  };
+
+  const getStatusText = (status) => {
+    const statusMap = {
+      pending: 'قيد المراجعة',
+      approved: 'متاح للبيع',
+      rejected: 'مرفوض',
+      awaiting_seller: 'في انتظار موافقة البائع'
+    };
+    return statusMap[status] || status;
+  };
+
+  const getStatusColor = (status) => {
+    const colorMap = {
+      pending: '#f59e0b',
+      approved: '#10b981',
+      rejected: '#ef4444',
+      awaiting_seller: '#3b82f6'
+    };
+    return colorMap[status] || '#6b7280';
+  };
+
+  if (loading) {
+    return (
+      <div className="loading">
+        <div className="spinner"></div>
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="container">
+        <div className="card" style={styles.error}>
+          <h2>المنتج غير موجود</h2>
+          <button className="btn btn-primary" onClick={() => navigate('/')}>
+            العودة للرئيسية
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container">
+      <button 
+        className="btn" 
+        onClick={() => navigate(-1)}
+        style={styles.backBtn}
+      >
+        ← رجوع
+      </button>
+
+      <div className="card" style={styles.productCard}>
+        {/* معرض الصور */}
+        {product.images && product.images.length > 0 && (
+          <div style={styles.imageGallery}>
+            <div style={styles.mainImage}>
+              <img
+                src={product.images[0]}
+                alt={product.title}
+                style={styles.mainImg}
+                onClick={() => openLightbox(0)}
+              />
+            </div>
+            {product.images.length > 1 && (
+              <div style={styles.thumbnails}>
+                {product.images.map((img, index) => (
+                  <img
+                    key={index}
+                    src={img}
+                    alt={`${product.title} ${index + 1}`}
+                    style={styles.thumbnail}
+                    onClick={() => openLightbox(index)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* تفاصيل المنتج */}
+        <div style={styles.details}>
+          <div style={styles.header}>
+            <h1 style={styles.title}>{product.title}</h1>
+            <span
+              style={{
+                ...styles.status,
+                background: getStatusColor(product.status) + '20',
+                color: getStatusColor(product.status)
+              }}
+            >
+              {getStatusText(product.status)}
+            </span>
+          </div>
+
+          <p style={styles.description}>{product.description}</p>
+
+          {/* معلومات السعر */}
+          <div style={styles.priceSection}>
+            {product.choice_type === 'recycle' ? (
+              <div style={styles.recycleBox}>
+                <h3 style={styles.recycleTitle}>♻️ إعادة تدوير</h3>
+                {product.recycle_idea && (
+                  <p style={styles.recycleIdea}>{product.recycle_idea}</p>
+                )}
+              </div>
+            ) : (
+              <>
+                {activeOffer && product.final_price ? (
+                  <div style={styles.offerPriceBox}>
+                    <div style={styles.offerBanner}>
+                      🎉 عرض خاص: خصم {activeOffer.discount_percentage}%
+                    </div>
+                    <div style={styles.offerTitle}>{activeOffer.title}</div>
+                    {activeOffer.description && (
+                      <p style={styles.offerDesc}>{activeOffer.description}</p>
+                    )}
+                    <div style={styles.priceComparison}>
+                      <div style={styles.oldPriceBox}>
+                        <span style={styles.priceLabel}>السعر الأصلي:</span>
+                        <span style={styles.oldPriceValue}>{product.final_price} جنيه</span>
+                      </div>
+                      <div style={styles.newPriceBox}>
+                        <span style={styles.priceLabel}>السعر بعد الخصم:</span>
+                        <span style={styles.newPriceValue}>
+                          {Math.round(product.final_price * (1 - activeOffer.discount_percentage / 100))} جنيه
+                        </span>
+                      </div>
+                    </div>
+                    <div style={styles.savings}>
+                      وفر {Math.round(product.final_price * (activeOffer.discount_percentage / 100))} جنيه! 💰
+                    </div>
+                    {activeOffer.end_date && (
+                      <div style={styles.offerEndDate}>
+                        ⏰ العرض ينتهي: {new Date(activeOffer.end_date).toLocaleDateString('ar-EG')}
+                      </div>
+                    )}
+                  </div>
+                ) : product.final_price ? (
+                  <div style={styles.priceBox}>
+                    <span style={styles.priceLabel}>السعر النهائي:</span>
+                    <span style={styles.finalPrice}>{product.final_price} جنيه</span>
+                  </div>
+                ) : product.negotiated_price ? (
+                  <div style={styles.priceBox}>
+                    <span style={styles.priceLabel}>السعر المقترح:</span>
+                    <span style={styles.negotiatedPrice}>{product.negotiated_price} جنيه</span>
+                  </div>
+                ) : (
+                  <div style={styles.priceBox}>
+                    <span style={styles.priceLabel}>السعر المقترح:</span>
+                    <span style={styles.suggestedPrice}>{product.suggested_price} جنيه</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* معلومات إضافية */}
+          <div style={styles.infoGrid}>
+            <div style={styles.infoItem}>
+              <span style={styles.infoLabel}>الحالة:</span>
+              <span style={styles.infoValue}>{product.condition}</span>
+            </div>
+            <div style={styles.infoItem}>
+              <span style={styles.infoLabel}>الفئة:</span>
+              <span style={styles.infoValue}>
+                {product.category === 'electronics' && 'إلكترونيات'}
+                {product.category === 'furniture' && 'أثاث'}
+                {product.category === 'clothes' && 'ملابس'}
+                {product.category === 'books' && 'كتب'}
+                {product.category === 'toys' && 'ألعاب'}
+                {product.category === 'other' && 'أخرى'}
+              </span>
+            </div>
+            {product.original_price && (
+              <div style={styles.infoItem}>
+                <span style={styles.infoLabel}>السعر الأصلي:</span>
+                <span style={styles.infoValue}>{product.original_price} جنيه</span>
+              </div>
+            )}
+            {product.discount_percentage && (
+              <div style={styles.infoItem}>
+                <span style={styles.infoLabel}>نسبة الخصم:</span>
+                <span style={styles.infoValue}>{product.discount_percentage}%</span>
+              </div>
+            )}
+          </div>
+
+          {/* معلومات التواصل */}
+          {seller && (
+            <div style={styles.sellerSection}>
+              <h3 style={styles.sectionTitle}>
+                {profile?.role === 'admin' ? 'معلومات البائع' : 'معلومات التواصل (بيكيا)'}
+              </h3>
+              <div style={styles.sellerInfo}>
+                <div style={styles.sellerItem}>
+                  <span style={styles.sellerLabel}>👤 الاسم:</span>
+                  <span style={styles.sellerValue}>{seller.username}</span>
+                </div>
+                <div style={styles.sellerItem}>
+                  <span style={styles.sellerLabel}>📍 الموقع:</span>
+                  <span style={styles.sellerValue}>{seller.location}</span>
+                </div>
+                {product.status === 'approved' && (
+                  <>
+                    <div style={styles.sellerItem}>
+                      <span style={styles.sellerLabel}>📞 الهاتف:</span>
+                      <span style={styles.sellerValue}>{seller.phone}</span>
+                    </div>
+                    <div style={styles.sellerItem}>
+                      <span style={styles.sellerLabel}>📧 البريد:</span>
+                      <span style={styles.sellerValue}>{seller.email}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ملاحظات التفاوض */}
+          {product.negotiation_note && (
+            <div style={styles.noteSection}>
+              <h3 style={styles.sectionTitle}>ملاحظة الإدارة</h3>
+              <p style={styles.note}>{product.negotiation_note}</p>
+            </div>
+          )}
+
+          {/* سبب الرفض */}
+          {product.rejection_reason && (
+            <div style={styles.rejectionSection}>
+              <h3 style={styles.sectionTitle}>سبب الرفض</h3>
+              <p style={styles.rejection}>{product.rejection_reason}</p>
+            </div>
+          )}
+
+          {/* أزرار التفاوض للأدمن فقط */}
+          {profile?.role === 'admin' && product.status === 'pending' && product.choice_type === 'sell' && (
+            <div style={styles.adminActions}>
+              <h3 style={styles.sectionTitle}>إجراءات الإدارة</h3>
+              <div style={styles.actionButtons}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => handleApprove(product.suggested_price)}
+                  style={styles.actionBtn}
+                >
+                  موافقة ({product.suggested_price} جنيه)
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleNegotiate}
+                  style={styles.actionBtn}
+                >
+                  تفاوض
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={handleReject}
+                  style={styles.actionBtn}
+                >
+                  رفض
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modal التفاوض */}
+      {showNegotiationModal && (
+        <div style={styles.modal}>
+          <div className="card" style={styles.modalContent}>
+            <h3 style={styles.modalTitle}>التفاوض على السعر</h3>
+            <p>المنتج: {product.title}</p>
+            <p>السعر المقترح: {product.suggested_price} جنيه</p>
+            
+            <div style={styles.field}>
+              <label style={styles.label}>عرض السعر الجديد:</label>
+              <input
+                type="number"
+                className="input"
+                value={negotiationPrice}
+                onChange={(e) => setNegotiationPrice(e.target.value)}
+                max="500"
+                placeholder="أدخل السعر المناسب"
+              />
+            </div>
+
+            <div style={styles.field}>
+              <label style={styles.label}>ملاحظة للبائع (اختياري):</label>
+              <textarea
+                className="input"
+                rows="3"
+                value={negotiationNote}
+                onChange={(e) => setNegotiationNote(e.target.value)}
+                placeholder="مثال: السعر مرتفع قليلاً بسبب حالة المنتج"
+              />
+            </div>
+
+            <div style={styles.modalActions}>
+              <button
+                className="btn btn-primary"
+                onClick={handleSendNegotiation}
+              >
+                إرسال العرض للبائع
+              </button>
+              <button
+                className="btn"
+                style={{ background: '#10b981', color: 'white' }}
+                onClick={() => {
+                  setShowNegotiationModal(false);
+                  handleApprove(negotiationPrice);
+                }}
+              >
+                موافقة مباشرة
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowNegotiationModal(false)}
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox للصور */}
+      {lightboxOpen && product.images && (
+        <ImageLightbox
+          images={product.images}
+          currentIndex={currentImageIndex}
+          onClose={() => setLightboxOpen(false)}
+          onNext={() => setCurrentImageIndex((currentImageIndex + 1) % product.images.length)}
+          onPrev={() => setCurrentImageIndex((currentImageIndex - 1 + product.images.length) % product.images.length)}
+        />
+      )}
+    </div>
+  );
+}
+
+const styles = {
+  backBtn: {
+    marginBottom: '20px'
+  },
+  productCard: {
+    maxWidth: '1000px',
+    margin: '0 auto'
+  },
+  imageGallery: {
+    marginBottom: '30px'
+  },
+  mainImage: {
+    width: '100%',
+    height: '400px',
+    marginBottom: '16px',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    cursor: 'pointer'
+  },
+  mainImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover'
+  },
+  thumbnails: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))',
+    gap: '12px'
+  },
+  thumbnail: {
+    width: '100%',
+    height: '100px',
+    objectFit: 'cover',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    border: '2px solid transparent',
+    transition: 'border 0.2s'
+  },
+  details: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '24px'
+  },
+  header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '16px',
+    flexWrap: 'wrap'
+  },
+  title: {
+    fontSize: '32px',
+    fontWeight: 'bold',
+    color: '#1f2937',
+    margin: 0
+  },
+  status: {
+    padding: '8px 16px',
+    borderRadius: '20px',
+    fontSize: '14px',
+    fontWeight: '600'
+  },
+  description: {
+    fontSize: '16px',
+    lineHeight: '1.8',
+    color: '#6b7280'
+  },
+  priceSection: {
+    padding: '20px',
+    background: '#f9fafb',
+    borderRadius: '12px'
+  },
+  priceBox: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+  priceLabel: {
+    fontSize: '18px',
+    color: '#6b7280'
+  },
+  finalPrice: {
+    fontSize: '32px',
+    fontWeight: 'bold',
+    color: '#10b981'
+  },
+  negotiatedPrice: {
+    fontSize: '28px',
+    fontWeight: 'bold',
+    color: '#3b82f6'
+  },
+  suggestedPrice: {
+    fontSize: '28px',
+    fontWeight: 'bold',
+    color: '#f59e0b'
+  },
+  recycleBox: {
+    textAlign: 'center'
+  },
+  recycleTitle: {
+    fontSize: '24px',
+    color: '#10b981',
+    marginBottom: '12px'
+  },
+  recycleIdea: {
+    fontSize: '16px',
+    color: '#6b7280',
+    lineHeight: '1.6'
+  },
+  offerPriceBox: {
+    background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+    padding: '24px',
+    borderRadius: '12px',
+    border: '3px solid #f59e0b'
+  },
+  offerBanner: {
+    background: '#dc2626',
+    color: 'white',
+    padding: '10px 20px',
+    borderRadius: '8px',
+    fontSize: '18px',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: '16px'
+  },
+  offerTitle: {
+    fontSize: '20px',
+    fontWeight: 'bold',
+    color: '#92400e',
+    marginBottom: '8px',
+    textAlign: 'center'
+  },
+  offerDesc: {
+    fontSize: '14px',
+    color: '#78350f',
+    marginBottom: '16px',
+    textAlign: 'center'
+  },
+  priceComparison: {
+    display: 'flex',
+    justifyContent: 'space-around',
+    gap: '20px',
+    marginBottom: '16px',
+    flexWrap: 'wrap'
+  },
+  oldPriceBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '8px'
+  },
+  oldPriceValue: {
+    fontSize: '20px',
+    color: '#9ca3af',
+    textDecoration: 'line-through',
+    fontWeight: '600'
+  },
+  newPriceBox: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '8px'
+  },
+  newPriceValue: {
+    fontSize: '32px',
+    fontWeight: 'bold',
+    color: '#dc2626'
+  },
+  savings: {
+    background: '#10b981',
+    color: 'white',
+    padding: '12px',
+    borderRadius: '8px',
+    textAlign: 'center',
+    fontSize: '18px',
+    fontWeight: 'bold',
+    marginBottom: '12px'
+  },
+  offerEndDate: {
+    textAlign: 'center',
+    fontSize: '14px',
+    color: '#92400e',
+    fontWeight: '600'
+  },
+  infoGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: '16px'
+  },
+  infoItem: {
+    padding: '16px',
+    background: '#f9fafb',
+    borderRadius: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px'
+  },
+  infoLabel: {
+    fontSize: '14px',
+    color: '#6b7280',
+    fontWeight: '600'
+  },
+  infoValue: {
+    fontSize: '16px',
+    color: '#1f2937',
+    fontWeight: '500'
+  },
+  sellerSection: {
+    padding: '20px',
+    background: '#eff6ff',
+    borderRadius: '12px',
+    border: '2px solid #3b82f6'
+  },
+  sectionTitle: {
+    fontSize: '20px',
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: '16px'
+  },
+  sellerInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px'
+  },
+  sellerItem: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    padding: '12px',
+    background: 'white',
+    borderRadius: '8px'
+  },
+  sellerLabel: {
+    fontSize: '14px',
+    color: '#6b7280',
+    fontWeight: '600'
+  },
+  sellerValue: {
+    fontSize: '14px',
+    color: '#1f2937',
+    fontWeight: '500'
+  },
+  noteSection: {
+    padding: '20px',
+    background: '#fef3c7',
+    borderRadius: '12px',
+    border: '2px solid #f59e0b'
+  },
+  note: {
+    fontSize: '16px',
+    color: '#92400e',
+    lineHeight: '1.6'
+  },
+  rejectionSection: {
+    padding: '20px',
+    background: '#fee2e2',
+    borderRadius: '12px',
+    border: '2px solid #ef4444'
+  },
+  rejection: {
+    fontSize: '16px',
+    color: '#991b1b',
+    lineHeight: '1.6'
+  },
+  adminActions: {
+    padding: '20px',
+    background: '#f0fdf4',
+    borderRadius: '12px',
+    border: '2px solid #10b981'
+  },
+  actionButtons: {
+    display: 'flex',
+    gap: '12px',
+    flexWrap: 'wrap',
+    marginTop: '16px'
+  },
+  actionBtn: {
+    flex: '1',
+    minWidth: '150px'
+  },
+  modal: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000
+  },
+  modalContent: {
+    maxWidth: '500px',
+    width: '90%',
+    maxHeight: '90vh',
+    overflow: 'auto'
+  },
+  modalTitle: {
+    fontSize: '20px',
+    marginBottom: '16px',
+    color: '#10b981'
+  },
+  field: {
+    marginTop: '16px',
+    marginBottom: '16px'
+  },
+  label: {
+    display: 'block',
+    marginBottom: '8px',
+    fontWeight: '600',
+    color: '#374151'
+  },
+  modalActions: {
+    display: 'flex',
+    gap: '12px',
+    marginTop: '20px',
+    flexWrap: 'wrap'
+  },
+  error: {
+    textAlign: 'center',
+    padding: '60px 20px'
+  }
+};

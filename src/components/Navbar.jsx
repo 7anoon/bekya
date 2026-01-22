@@ -1,0 +1,358 @@
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuthStore } from '../store/authStore';
+import { useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
+
+export default function Navbar() {
+  const { profile, signOut } = useAuthStore();
+  const navigate = useNavigate();
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (profile?.id) {
+      // طلب إذن الإشعارات من المتصفح
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+      
+      loadUnreadCount();
+      
+      // الاستماع للإشعارات الجديدة والتحديثات في الوقت الفعلي
+      const channel = supabase
+        .channel('notifications-changes')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${profile.id}`
+          },
+          (payload) => {
+            console.log('إشعار جديد:', payload);
+            // تشغيل الصوت مع كل إشعار جديد
+            playNotificationSound();
+            
+            // رسالة مخصصة حسب نوع الإشعار
+            const message = payload.new?.message || 'لديك إشعار جديد!';
+            showBrowserNotification(message);
+            
+            // تحديث العدد
+            loadUnreadCount();
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${profile.id}`
+          },
+          (payload) => {
+            console.log('إشعار تم تحديثه:', payload);
+            // تحديث العدد عند تعليم الإشعارات كمقروءة
+            loadUnreadCount();
+          }
+        )
+        .subscribe();
+      
+      // الاستماع لحدث تحديث الإشعارات (عند القراءة)
+      const handleNotificationsUpdate = () => {
+        loadUnreadCount();
+      };
+      window.addEventListener('notificationsUpdated', handleNotificationsUpdate);
+      
+      return () => {
+        channel.unsubscribe();
+        window.removeEventListener('notificationsUpdated', handleNotificationsUpdate);
+      };
+    }
+  }, [profile]);
+
+  const loadUnreadCount = async () => {
+    if (!profile?.id) return;
+    
+    try {
+      const { count, error } = await supabase
+        .from('notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', profile.id)
+        .eq('read', false);
+
+      if (!error) {
+        console.log('Unread count updated:', count); // للتأكد
+        setUnreadCount(count || 0);
+      }
+    } catch (err) {
+      console.error('Error loading unread count:', err);
+    }
+  };
+
+
+
+  const showBrowserNotification = (message = 'لديك إشعار جديد! منتج جديد متاح في منطقتك') => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('بيكيا - إشعار جديد', {
+        body: message,
+        icon: '/favicon.ico',
+        badge: '/favicon.ico',
+        tag: 'bekya-notification',
+        requireInteraction: false
+      });
+    }
+  };
+
+  const playNotificationSound = () => {
+    try {
+      // محاولة تشغيل ملف صوت (إذا كان موجود)
+      const audio = new Audio('/notification.mp3');
+      audio.volume = 0.5;
+      
+      audio.play().catch(() => {
+        // إذا فشل تشغيل الملف، استخدم Web Audio API
+        playGeneratedSound();
+      });
+      
+    } catch (err) {
+      // إذا حدث خطأ، استخدم Web Audio API
+      playGeneratedSound();
+    }
+  };
+
+  const playGeneratedSound = () => {
+    try {
+      // إنشاء صوت إشعار بسيط باستخدام Web Audio API
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // نغمة 1 (دينج)
+      const oscillator1 = audioContext.createOscillator();
+      const gainNode1 = audioContext.createGain();
+      
+      oscillator1.connect(gainNode1);
+      gainNode1.connect(audioContext.destination);
+      
+      oscillator1.frequency.value = 800; // تردد النغمة
+      oscillator1.type = 'sine'; // نوع الموجة
+      
+      gainNode1.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode1.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+      
+      oscillator1.start(audioContext.currentTime);
+      oscillator1.stop(audioContext.currentTime + 0.15);
+      
+      // نغمة 2 (دونج - بعد 0.1 ثانية)
+      setTimeout(() => {
+        const oscillator2 = audioContext.createOscillator();
+        const gainNode2 = audioContext.createGain();
+        
+        oscillator2.connect(gainNode2);
+        gainNode2.connect(audioContext.destination);
+        
+        oscillator2.frequency.value = 1000;
+        oscillator2.type = 'sine';
+        
+        gainNode2.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+        
+        oscillator2.start(audioContext.currentTime);
+        oscillator2.stop(audioContext.currentTime + 0.15);
+      }, 100);
+      
+    } catch (err) {
+      console.error('Error playing generated sound:', err);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/login');
+  };
+
+  const toggleMenu = () => {
+    setMenuOpen(!menuOpen);
+  };
+
+  return (
+    <nav style={styles.nav}>
+      <div className="container" style={styles.container}>
+        <Link to="/" style={styles.logo}>
+          بيكيا 🛒
+        </Link>
+        
+        <div style={styles.rightSection}>
+          {/* Notification Bell - Always Visible */}
+          <Link to="/notifications" style={styles.notificationLink}>
+            <span style={styles.bellIcon}>🔔</span>
+            {unreadCount > 0 && (
+              <span style={styles.badge}>{unreadCount}</span>
+            )}
+          </Link>
+          
+          {/* Hamburger Menu Button for Mobile */}
+          <button 
+            onClick={toggleMenu} 
+            className="navbar-hamburger"
+            style={styles.hamburger}
+            aria-label="القائمة"
+          >
+            {menuOpen ? '✕' : '☰'}
+          </button>
+        </div>
+        
+        <div 
+          className={`navbar-menu ${menuOpen ? 'menu-open' : 'menu-closed'}`}
+          style={styles.menu}
+        >
+          <Link to="/" style={styles.link} onClick={() => setMenuOpen(false)}>الرئيسية</Link>
+          <Link to="/add-product" style={styles.link} onClick={() => setMenuOpen(false)}>إضافة منتج</Link>
+          <Link to="/profile" style={styles.link} onClick={() => setMenuOpen(false)}>حسابي</Link>
+          {profile?.role === 'admin' && (
+            <>
+              <Link to="/admin" style={styles.link} onClick={() => setMenuOpen(false)}>لوحة الإدارة</Link>
+              <Link to="/admin/offers" style={styles.link} onClick={() => setMenuOpen(false)}>إدارة العروض</Link>
+            </>
+          )}
+          <button onClick={handleSignOut} style={styles.logoutBtn}>
+            تسجيل خروج
+          </button>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+const styles = {
+  nav: {
+    background: 'white',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    marginBottom: '20px',
+    position: 'sticky',
+    top: 0,
+    zIndex: 100
+  },
+  container: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '16px 20px',
+    position: 'relative'
+  },
+  logo: {
+    fontSize: '24px',
+    fontWeight: 'bold',
+    color: '#10b981',
+    textDecoration: 'none',
+    zIndex: 101
+  },
+  rightSection: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    zIndex: 101
+  },
+  hamburger: {
+    display: 'none',
+    fontSize: '28px',
+    background: 'none',
+    border: 'none',
+    color: '#10b981',
+    cursor: 'pointer',
+    padding: '8px',
+    zIndex: 101
+  },
+  menu: {
+    display: 'flex',
+    gap: '20px',
+    alignItems: 'center'
+  },
+  link: {
+    color: '#4b5563',
+    textDecoration: 'none',
+    fontWeight: '500',
+    transition: 'color 0.3s',
+    whiteSpace: 'nowrap'
+  },
+  notificationLink: {
+    position: 'relative',
+    color: '#4b5563',
+    textDecoration: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    padding: '8px'
+  },
+  bellIcon: {
+    fontSize: '20px'
+  },
+  badge: {
+    position: 'absolute',
+    top: '-8px',
+    right: '-8px',
+    background: '#ef4444',
+    color: 'white',
+    borderRadius: '50%',
+    width: '20px',
+    height: '20px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '11px',
+    fontWeight: 'bold'
+  },
+  logoutBtn: {
+    padding: '8px 16px',
+    background: '#ef4444',
+    color: 'white',
+    borderRadius: '6px',
+    fontWeight: '500',
+    whiteSpace: 'nowrap'
+  }
+};
+
+// Add media query styles
+if (typeof window !== 'undefined') {
+  const style = document.createElement('style');
+  style.textContent = `
+    .navbar-hamburger {
+      display: none;
+    }
+    
+    @media (max-width: 768px) {
+      .navbar-hamburger {
+        display: block !important;
+      }
+      
+      .navbar-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: white;
+        flex-direction: column;
+        padding: 16px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        gap: 12px !important;
+        align-items: stretch !important;
+        transition: all 0.3s ease;
+      }
+      
+      .navbar-menu.menu-closed {
+        display: none !important;
+      }
+      
+      .navbar-menu.menu-open {
+        display: flex !important;
+      }
+      
+      .navbar-menu a,
+      .navbar-menu button {
+        width: 100%;
+        text-align: center;
+        padding: 12px !important;
+        display: block;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
