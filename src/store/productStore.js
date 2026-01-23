@@ -290,12 +290,13 @@ export const useProductStore = create((set, get) => ({
       .eq('id', productId)
       .single();
 
+    // تغيير الحالة لـ pending (في انتظار موافقة الأدمن النهائية)
     const { data, error } = await supabase
       .from('products')
       .update({ 
-        status: 'approved',
+        status: 'pending',
         final_price: product.negotiated_price,
-        approved_at: new Date().toISOString()
+        seller_accepted: true // علامة إن البائع وافق
       })
       .eq('id', productId)
       .select()
@@ -303,7 +304,7 @@ export const useProductStore = create((set, get) => ({
 
     if (error) throw error;
 
-    // إرسال إشعار للأدمن بأن البائع وافق
+    // إرسال إشعار للأدمن بأن البائع وافق ويحتاج موافقة نهائية
     const { data: admins } = await supabase
       .from('profiles')
       .select('id')
@@ -313,15 +314,12 @@ export const useProductStore = create((set, get) => ({
       const notifications = admins.map(admin => ({
         user_id: admin.id,
         product_id: productId,
-        message: `✅ البائع وافق على العرض! تم نشر المنتج "${product.title}" بسعر ${product.negotiated_price} جنيه`,
+        message: `✅ البائع وافق على العرض! المنتج "${product.title}" بسعر ${product.negotiated_price} جنيه - يحتاج موافقتك النهائية للنشر`,
         type: 'offer'
       }));
 
       await supabase.from('notifications').insert(notifications);
     }
-
-    // إرسال إشعارات للمستخدمين القريبين
-    await get().sendLocationNotifications(data);
     
     return data;
   },
