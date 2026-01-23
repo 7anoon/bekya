@@ -30,6 +30,11 @@ export default function AdminDashboard() {
   };
 
   const getStatusText = (product) => {
+    // إذا البائع وافق على العرض - يحتاج موافقة نهائية من الأدمن
+    if (product.seller_accepted) {
+      return '🎉 البائع وافق - يحتاج موافقتك النهائية';
+    }
+    
     // إذا كان البائع رفض عرض التفاوض
     if (product.seller_rejected_negotiation) {
       return '🔴 البائع رفض السعر';
@@ -53,6 +58,19 @@ export default function AdminDashboard() {
     const baseStyle = {
       ...styles.statusBadge
     };
+
+    // إذا البائع وافق - لون أخضر مميز
+    if (product.seller_accepted) {
+      return {
+        ...baseStyle,
+        background: '#10b981',
+        color: '#ffffff',
+        border: '3px solid #059669',
+        fontWeight: 'bold',
+        fontSize: '14px',
+        animation: 'pulse 2s infinite'
+      };
+    }
 
     // إذا البائع رفض عرض التفاوض - لون أحمر غامق
     if (product.seller_rejected_negotiation) {
@@ -234,6 +252,15 @@ export default function AdminDashboard() {
                       {product.negotiation_note && (
                         <p style={styles.rejectionNote}>{product.negotiation_note}</p>
                       )}
+                    </div>
+                  )}
+                  
+                  {/* رسالة إذا البائع وافق */}
+                  {product.seller_accepted && (
+                    <div style={styles.acceptanceNotice}>
+                      <strong>✅ البائع وافق على العرض!</strong>
+                      <p>السعر المتفق عليه: <span style={styles.agreedPrice}>{product.final_price} جنيه</span></p>
+                      <p style={styles.noticeText}>يحتاج موافقتك النهائية لنشر المنتج في التطبيق</p>
                     </div>
                   )}
                   
@@ -525,6 +552,26 @@ const styles = {
     fontSize: '14px',
     fontWeight: 'normal',
     color: '#7f1d1d'
+  },
+  acceptanceNotice: {
+    background: '#f0fdf4',
+    border: '3px solid #10b981',
+    borderRadius: '8px',
+    padding: '16px',
+    marginBottom: '16px',
+    color: '#166534',
+    fontWeight: '600'
+  },
+  agreedPrice: {
+    fontSize: '20px',
+    fontWeight: 'bold',
+    color: '#10b981'
+  },
+  noticeText: {
+    marginTop: '8px',
+    fontSize: '14px',
+    fontWeight: 'normal',
+    color: '#166534'
   },
   productDetails: {
     background: '#f9fafb',
